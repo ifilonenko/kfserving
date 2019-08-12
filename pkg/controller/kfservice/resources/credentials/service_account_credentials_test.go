@@ -18,6 +18,8 @@ package credentials
 
 import (
 	"context"
+	"fmt"
+	"kfserving/pkg/controller/kfservice/resources/credentials/hdfs"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -36,7 +38,10 @@ var configMap = &v1.ConfigMap{
 			"gcs" : {"gcsCredentialFileName": "gcloud-application-credentials.json"},
 			"s3" : {
 				"s3AccessKeyIDName": "awsAccessKeyID",
-				"s3SecretAccessKeyName": "awsSecretAccessKey"
+				"s3SecretAccessKeyName": "awsSecretAccessKey"},
+			"hdfs" : {
+				"hdfsTokenSecret": "hdfsTokenSecret",
+				"hdfsConfigMap": "hdfsConfigMap"
 			}
 	    }`,
 	},
@@ -283,6 +288,225 @@ func TestGCSCredentialBuilder(t *testing.T) {
 		}
 		g.Expect(c.Delete(context.TODO(), existingServiceAccount)).NotTo(gomega.HaveOccurred())
 		g.Expect(c.Delete(context.TODO(), existingGCSSecret)).NotTo(gomega.HaveOccurred())
+
+	}
+}
+
+func TestHDFSCredentialBuilder(t *testing.T) {
+	g := gomega.NewGomegaWithT(t)
+	emptySpec := &v1alpha1.Configuration{
+		Spec: v1alpha1.ConfigurationSpec{
+			Template: &v1alpha1.RevisionTemplateSpec{
+				Spec: v1alpha1.RevisionSpec{
+					RevisionSpec: v1beta1.RevisionSpec{
+						PodSpec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									VolumeMounts: []v1.VolumeMount{
+										{
+											Name:      hdfs.HDFSSecretVolumeName,
+											ReadOnly:  true,
+											MountPath: hdfs.HDFSSecretVolumePath,
+										},
+										{
+											Name:      hdfs.HDFSConfigMapVolumeName,
+											ReadOnly:  true,
+											MountPath: hdfs.HDFSConfigMapVolumePath,
+										},
+										{
+											Name:      hdfs.HDFSConfigMapVolumeName,
+											SubPath:   "krb5.conf",
+											ReadOnly:  true,
+											MountPath: hdfs.HDFSKRBConfPath,
+										},
+									},
+									Env: []v1.EnvVar{
+										{
+											Name:  hdfs.HDFSLocation,
+											Value: fmt.Sprintf("%s/%s", hdfs.HDFSSecretVolumePath, hdfs.HDFSSecretVolumeName),
+										},
+										{
+											Name:  hdfs.HDFSConfDir,
+											Value: hdfs.HDFSConfigMapVolumePath,
+										},
+										{
+											Name:  hdfs.HDFSUserName,
+											Value: "default",
+										},
+									},
+								},
+							},
+							Volumes: []v1.Volume{
+								{
+									Name: hdfs.HDFSSecretVolumeName,
+									VolumeSource: v1.VolumeSource{
+										Secret: &v1.SecretVolumeSource{
+											DefaultMode: hdfs.Int32Ptr(420),
+											SecretName: "hadoop-token",
+										},
+									},
+								},
+								{
+									Name: hdfs.HDFSConfigMapVolumeName,
+									VolumeSource: v1.VolumeSource{
+										Secret: &v1.SecretVolumeSource{
+											DefaultMode: hdfs.Int32Ptr(420),
+											SecretName: "hadoop-cmap",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	existingHDFSToken := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hadoop-token",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"hdfsTokenSecret": {},
+		},
+	}
+	existingHDFSCMap := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hadoop-cmap",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"hdfsConfigMap": {},
+		},
+	}
+
+	scenarios := map[string]struct {
+		serviceAccount        *v1.ServiceAccount
+		existingToken         bool
+		existingCMap		  bool
+		inputConfiguration    *v1alpha1.Configuration
+		expectedConfiguration *v1alpha1.Configuration
+		shouldFail            bool
+	}{
+		"Missing HDFS SA Volumes": {
+			serviceAccount: &v1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "default",
+				},
+				Secrets: []v1.ObjectReference{},
+			},
+			inputConfiguration: emptySpec,
+			expectedConfiguration: emptySpec,
+		},
+		"Build HDFS volumes": {
+			serviceAccount: &v1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default",
+					Namespace: "default",
+				},
+				Secrets: []v1.ObjectReference{
+					{
+						Name:      "hadoop-token",
+						Namespace: "default",
+					},
+					{
+						Name:      "hadoop-cmap",
+						Namespace: "default",
+					},
+				},
+			},
+			existingToken: true,
+			existingCMap: true,
+			inputConfiguration: emptySpec,
+			expectedConfiguration: &v1alpha1.Configuration{
+				Spec: v1alpha1.ConfigurationSpec{
+					Template: &v1alpha1.RevisionTemplateSpec{
+						Spec: v1alpha1.RevisionSpec{
+							RevisionSpec: v1beta1.RevisionSpec{
+								PodSpec: v1.PodSpec{
+									Containers: []v1.Container{
+										{
+											VolumeMounts: []v1.VolumeMount{
+												{
+													Name:      hdfs.HDFSSecretVolumeName,
+													ReadOnly:  true,
+													MountPath: hdfs.HDFSSecretVolumePath,
+												},
+												{
+													Name:      hdfs.HDFSConfigMapVolumeName,
+													ReadOnly:  true,
+													MountPath: hdfs.HDFSConfigMapVolumePath,
+												},
+												{
+													Name:      hdfs.HDFSConfigMapVolumeName,
+													SubPath:   "krb5.conf",
+													ReadOnly:  true,
+													MountPath: hdfs.HDFSKRBConfPath,
+												},
+											},
+											Env: []v1.EnvVar{
+												{
+													Name:  hdfs.HDFSLocation,
+													Value: fmt.Sprintf("%s/%s", hdfs.HDFSSecretVolumePath, hdfs.HDFSSecretVolumeName),
+												},
+												{
+													Name:  hdfs.HDFSConfDir,
+													Value: hdfs.HDFSConfigMapVolumePath,
+												},
+												{
+													Name:  hdfs.HDFSUserName,
+													Value: "default",
+												},
+											},
+										},
+									},
+									Volumes: []v1.Volume{
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			shouldFail: false,
+		},
+	}
+
+	builder := NewCredentialBulder(c, configMap)
+	for name, scenario := range scenarios {
+		g.Expect(c.Create(context.TODO(), scenario.serviceAccount)).NotTo(gomega.HaveOccurred())
+		if scenario.existingCMap {
+			g.Expect(c.Create(context.TODO(), existingHDFSCMap)).NotTo(gomega.HaveOccurred())
+		}
+		if scenario.existingToken {
+			g.Expect(c.Create(context.TODO(), existingHDFSToken)).NotTo(gomega.HaveOccurred())
+		}
+
+		err := builder.CreateSecretVolumeAndEnv(scenario.serviceAccount.Namespace, scenario.serviceAccount.Name,
+			&scenario.inputConfiguration.Spec.Template.Spec.Containers[0],
+			&scenario.inputConfiguration.Spec.Template.Spec.Volumes,
+		)
+		if scenario.shouldFail && err == nil {
+			t.Errorf("Test %q failed: returned success but expected error", name)
+		}
+		// Validate
+		if !scenario.shouldFail {
+			if err != nil {
+				t.Errorf("Test %q failed: returned error: %v", name, err)
+			}
+			if diff := cmp.Diff(scenario.expectedConfiguration, scenario.inputConfiguration); diff != "" {
+				t.Errorf("Test %q unexpected configuration spec (-want +got): %v", name, diff)
+			}
+		}
+		g.Expect(c.Delete(context.TODO(), scenario.serviceAccount)).NotTo(gomega.HaveOccurred())
+		if scenario.existingCMap {
+			g.Expect(c.Delete(context.TODO(), existingHDFSCMap)).NotTo(gomega.HaveOccurred())
+		}
+		if scenario.existingToken {
+			g.Expect(c.Delete(context.TODO(), existingHDFSToken)).NotTo(gomega.HaveOccurred())
+		}
 
 	}
 }
